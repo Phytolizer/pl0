@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) enum TokenType {
     // Symbols
     Period,
@@ -38,7 +38,7 @@ pub(crate) enum TokenType {
     Unknown(char),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct SourceLocation {
     pub(crate) file_path: PathBuf,
     pub(crate) line: usize,
@@ -55,7 +55,7 @@ impl SourceLocation {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct Token {
     pub(crate) token_type: TokenType,
     pub(crate) source_location: SourceLocation,
