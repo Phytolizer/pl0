@@ -1,0 +1,8 @@
+[package]
+name = "pl0"
+version = "0.1.0"
+authors = ["Kyle Coffey <kylecoffey1999@gmail.com>"]
+license = "GPL-3.0-only"
+edition = "2021"
+
+[dependencies]
