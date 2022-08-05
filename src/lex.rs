@@ -45,7 +45,7 @@ impl<'src> Iterator for SourceCodeIterator<'src> {
     }
 }
 
-pub(crate) struct Lexer<'src> {
+struct Lexer<'src> {
     file_path: PathBuf,
     source: SourceCodeIterator<'src>,
 }
