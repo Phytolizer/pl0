@@ -7,6 +7,7 @@ mod parse;
 mod tree;
 
 use lex::lex;
+use parse::parse;
 use parse::ParseError;
 
 #[derive(Debug, thiserror::Error)]
@@ -21,6 +22,8 @@ type Result<T> = std::result::Result<T, Error>;
 
 fn run() -> Result<()> {
     let tokens = lex(PathBuf::from("example.m"), "BEGIN VAR x := 1; END.")?;
+    let tree = parse(&tokens)?;
+    dbg!(tree);
     Ok(())
 }
 

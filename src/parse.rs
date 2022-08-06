@@ -1,3 +1,4 @@
+use std::error::Error;
 use std::iter::Enumerate;
 use std::num::NonZeroUsize;
 use std::ops::Range;
@@ -12,7 +13,6 @@ use nom::combinator::opt;
 use nom::combinator::verify;
 use nom::multi::many0;
 use nom::sequence::pair;
-use nom::sequence::terminated;
 use nom::sequence::tuple;
 use nom::IResult;
 use nom::InputIter;
@@ -58,7 +58,7 @@ use crate::tree::WriteStatement;
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum ParseError {
-    #[error("parsing: {0}")]
+    #[error("{0}")]
     Nom(String),
 }
 
@@ -524,7 +524,7 @@ fn program(tokens: &[Token]) -> IResult<TokenInput, Program> {
         .parse(TokenInput::new(tokens))
 }
 
-fn parse(tokens: &[Token]) -> crate::Result<SyntaxTree> {
+pub(crate) fn parse(tokens: &[Token]) -> crate::Result<SyntaxTree> {
     program(tokens)
         .map(|(_, root)| SyntaxTree {
             root: Box::new(root),
