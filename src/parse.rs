@@ -131,7 +131,7 @@ impl<'a> InputIter for TokenInput<'a> {
     }
 }
 
-fn token(ty: TokenType) -> impl FnMut(TokenInput<'_>) -> IResult<TokenInput<'_>, Token> {
+fn token<'a>(ty: TokenType) -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, Token> {
     map(
         verify(take(1usize), move |t: &TokenInput| {
             t.tokens[0].token_type == ty
