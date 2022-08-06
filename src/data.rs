@@ -29,6 +29,7 @@ pub(crate) enum TokenType {
     KwEnd,
     KwIf,
     KwOdd,
+    KwProcedure,
     KwThen,
     KwVar,
     KwWhile,

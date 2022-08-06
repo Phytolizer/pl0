@@ -58,11 +58,6 @@ pub(crate) struct VarEntry {
     pub(crate) name: Token,
 }
 
-pub(crate) struct ProcedureBlock {
-    pub(crate) procedures: Vec<Procedure>,
-    pub(crate) statement: Statement,
-}
-
 pub(crate) struct Procedure {
     pub(crate) procedure_kw: Token,
     pub(crate) name: Token,

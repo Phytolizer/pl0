@@ -123,6 +123,7 @@ impl<'src> Iterator for Lexer<'src> {
                         "END" => break TokenType::KwEnd,
                         "IF" => break TokenType::KwIf,
                         "ODD" => break TokenType::KwOdd,
+                        "PROCEDURE" => break TokenType::KwProcedure,
                         "THEN" => break TokenType::KwThen,
                         "VAR" => break TokenType::KwVar,
                         "WHILE" => break TokenType::KwWhile,
