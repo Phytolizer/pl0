@@ -1,5 +1,6 @@
 use std::io;
 use std::iter::Peekable;
+use std::path::Path;
 use std::path::PathBuf;
 use std::str::Chars;
 
@@ -62,6 +63,12 @@ impl<'src> Lexer<'src> {
 pub(crate) fn lex(file_path: PathBuf, text: &str) -> Result<Vec<Token>, io::Error> {
     let lexer = Lexer::new(file_path, text);
     Ok(lexer.collect())
+}
+
+pub(crate) fn lex_file(file_path: impl AsRef<Path>) -> Result<Vec<Token>, io::Error> {
+    let file_path = file_path.as_ref();
+    let text = std::fs::read_to_string(file_path)?;
+    lex(file_path.to_path_buf(), &text)
 }
 
 impl<'src> Iterator for Lexer<'src> {

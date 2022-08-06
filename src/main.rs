@@ -1,12 +1,11 @@
 use std::io;
-use std::path::PathBuf;
 
 mod data;
 mod lex;
 mod parse;
 mod tree;
 
-use lex::lex;
+use lex::lex_file;
 use parse::parse;
 use parse::ParseError;
 
@@ -21,27 +20,7 @@ enum Error {
 type Result<T> = std::result::Result<T, Error>;
 
 fn run() -> Result<()> {
-    let tokens = lex(
-        PathBuf::from("example.m"),
-        "
-            VAR x, squ;
-
-            PROCEDURE square;
-            BEGIN
-               squ := x * x
-            END;
-
-            BEGIN
-               x := 1;
-               WHILE x <= 10 DO
-               BEGIN
-                  CALL square;
-                  ! squ;
-                  x := x + 1
-               END
-            END.
-        ",
-    )?;
+    let tokens = lex_file("example.m")?;
     let tree = parse(&tokens)?;
     dbg!(tree);
     Ok(())
