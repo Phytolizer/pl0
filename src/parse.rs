@@ -389,7 +389,7 @@ fn condition<'a>() -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, Cond
 fn assignment_statement<'a>(
 ) -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, AssignmentStatement> {
     map(
-        tuple((ident(), token(TokenType::Equal), expression())),
+        tuple((ident(), token(TokenType::ColonEqual), expression())),
         |(variable, colon_equal_token, expression)| AssignmentStatement {
             variable,
             colon_equal_token,

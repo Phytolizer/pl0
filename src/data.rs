@@ -1,3 +1,5 @@
+use std::fmt::Debug;
+use std::fmt::Display;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -46,6 +48,18 @@ pub(crate) struct SourceLocation {
     pub(crate) column: usize,
 }
 
+impl Display for SourceLocation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}:{}:{}",
+            self.file_path.display(),
+            self.line,
+            self.column
+        )
+    }
+}
+
 impl SourceLocation {
     pub(crate) fn new(file_path: PathBuf, line: usize, column: usize) -> Self {
         Self {
@@ -56,10 +70,16 @@ impl SourceLocation {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub(crate) struct Token {
     pub(crate) token_type: TokenType,
     pub(crate) source_location: SourceLocation,
+}
+
+impl Debug for Token {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {:?}", self.source_location, self.token_type)
+    }
 }
 
 impl Token {
