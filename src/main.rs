@@ -7,21 +7,18 @@ mod tree;
 
 use lex::lex_file;
 use parse::parse;
-use parse::ParseError;
 
 #[derive(Debug, thiserror::Error)]
 enum Error {
     #[error(transparent)]
     Io(#[from] io::Error),
-    #[error(transparent)]
-    Parse(#[from] ParseError),
 }
 
 type Result<T> = std::result::Result<T, Error>;
 
 fn run() -> Result<()> {
     let tokens = lex_file("example.m")?;
-    let tree = parse(&tokens)?;
+    let (tree, _errors) = parse(&tokens);
     dbg!(tree);
     Ok(())
 }

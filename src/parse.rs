@@ -1,5 +1,4 @@
-use std::error::Error;
-use std::fmt::Display;
+use std::cell::RefCell;
 use std::iter::Enumerate;
 use std::num::NonZeroUsize;
 use std::ops::Range;
@@ -9,11 +8,13 @@ use std::ops::RangeTo;
 
 use nom::branch::alt;
 use nom::bytes::complete::take;
+use nom::combinator::all_consuming;
 use nom::combinator::map;
 use nom::combinator::opt;
 use nom::combinator::verify;
 use nom::multi::many0;
 use nom::sequence::pair;
+use nom::sequence::preceded;
 use nom::sequence::tuple;
 use nom::IResult;
 use nom::InputIter;
@@ -23,6 +24,7 @@ use nom::Needed;
 use nom::Parser;
 use nom::Slice;
 
+use crate::data::SourceLocation;
 use crate::data::Token;
 use crate::data::TokenType;
 use crate::tree::AssignmentStatement;
@@ -38,11 +40,8 @@ use crate::tree::Factor;
 use crate::tree::IfStatement;
 use crate::tree::OddCondition;
 use crate::tree::ParenthesizedFactor;
-use crate::tree::PrefixedConstEntry;
 use crate::tree::PrefixedFactor;
-use crate::tree::PrefixedStatement;
 use crate::tree::PrefixedTerm;
-use crate::tree::PrefixedVarEntry;
 use crate::tree::Procedure;
 use crate::tree::ProcedureCallStatement;
 use crate::tree::Program;
@@ -57,23 +56,40 @@ use crate::tree::VarSection;
 use crate::tree::WhileStatement;
 use crate::tree::WriteStatement;
 
-#[derive(Debug, thiserror::Error)]
-pub(crate) enum ParseError {
-    #[error("{0}")]
-    Nom(String),
+#[derive(Debug)]
+pub(crate) struct Error {
+    pub(crate) location: SourceLocation,
+    pub(crate) message: String,
+}
+
+impl Error {
+    fn new(location: SourceLocation, message: String) -> Self {
+        Self { location, message }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct State<'a>(&'a RefCell<Vec<Error>>);
+
+impl<'a> State<'a> {
+    fn report_error(&self, error: Error) {
+        self.0.borrow_mut().push(error);
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
 struct TokenInput<'a> {
     tokens: &'a [Token],
+    state: &'a State<'a>,
     start: usize,
     end: usize,
 }
 
 impl<'a> TokenInput<'a> {
-    fn new(tokens: &'a [Token]) -> Self {
+    fn new(tokens: &'a [Token], state: &'a State<'a>) -> Self {
         Self {
             tokens,
+            state,
             start: 0,
             end: tokens.len(),
         }
@@ -90,6 +106,7 @@ impl<'a> InputTake for TokenInput<'a> {
     fn take(&self, count: usize) -> Self {
         Self {
             tokens: &self.tokens[self.start..self.start + count],
+            state: self.state,
             start: 0,
             end: count,
         }
@@ -97,7 +114,7 @@ impl<'a> InputTake for TokenInput<'a> {
 
     fn take_split(&self, count: usize) -> (Self, Self) {
         let (prefix, suffix) = self.tokens.split_at(count);
-        (Self::new(suffix), Self::new(prefix))
+        (Self::new(suffix, self.state), Self::new(prefix, self.state))
     }
 }
 
@@ -105,6 +122,7 @@ impl<'a> Slice<Range<usize>> for TokenInput<'a> {
     fn slice(&self, range: Range<usize>) -> Self {
         Self {
             tokens: self.tokens.slice(range.clone()),
+            state: self.state,
             start: self.start + range.start,
             end: self.start + range.end,
         }
@@ -127,6 +145,7 @@ impl<'a> Slice<RangeFull> for TokenInput<'a> {
     fn slice(&self, _: RangeFull) -> Self {
         Self {
             tokens: self.tokens,
+            state: self.state,
             start: self.start,
             end: self.end,
         }
@@ -164,6 +183,28 @@ impl<'a> InputIter for TokenInput<'a> {
     }
 }
 
+fn expect<'a, F, E, T>(
+    mut parser: F,
+    error_msg: E,
+) -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, Option<T>>
+where
+    F: FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, T>,
+    E: ToString,
+{
+    move |input| match parser(input) {
+        Ok((remaining, out)) => Ok((remaining, Some(out))),
+        Err(nom::Err::Error(input) | nom::Err::Failure(input)) => {
+            let err = Error::new(
+                input.input.tokens[0].source_location.clone(),
+                error_msg.to_string(),
+            );
+            input.input.state.report_error(err);
+            Ok((input.input, None))
+        }
+        Err(e) => Err(e),
+    }
+}
+
 fn take_only_token(t: TokenInput) -> Token {
     t.tokens[0].clone()
 }
@@ -197,7 +238,11 @@ fn number<'a>() -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, Token> 
 
 fn const_entry<'a>() -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, ConstEntry> {
     map(
-        tuple((ident(), token(TokenType::Equal), number())),
+        tuple((
+            ident(),
+            expect(token(TokenType::Equal), "Expected '=' after constant name"),
+            expect(number(), "Expected number after '='"),
+        )),
         |(name, equal_token, value)| ConstEntry {
             name,
             equal_token,
@@ -207,17 +252,23 @@ fn const_entry<'a>() -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, Co
 }
 
 fn prefixed_const_entry<'a>(
-) -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, PrefixedConstEntry> {
-    map(
-        pair(token(TokenType::Comma), const_entry()),
-        |(comma_token, entry)| PrefixedConstEntry { comma_token, entry },
+) -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, Option<ConstEntry>> {
+    preceded(
+        token(TokenType::Comma),
+        expect(const_entry(), "Expected another entry after ','"),
     )
 }
 
 fn const_entries<'a>() -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, ConstEntries> {
     map(
         pair(const_entry(), many0(prefixed_const_entry())),
-        |(first, rest)| ConstEntries { first, rest },
+        |(first, rest)| ConstEntries {
+            entries: {
+                let mut entries = vec![first];
+                entries.extend(rest.into_iter().filter_map(|e| e));
+                entries
+            },
+        },
     )
 }
 
@@ -225,8 +276,8 @@ fn const_section<'a>() -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, 
     map(
         tuple((
             token(TokenType::KwConst),
-            const_entries(),
-            token(TokenType::Semicolon),
+            expect(const_entries(), "Expected constant name after 'const'"),
+            expect(token(TokenType::Semicolon), "Expected ';' after constants"),
         )),
         |(const_kw, entries, semicolon_token)| ConstSection {
             const_kw,
@@ -240,18 +291,22 @@ fn var_entry<'a>() -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, VarE
     map(ident(), |name| VarEntry { name })
 }
 
-fn prefixed_var_entry<'a>(
-) -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, PrefixedVarEntry> {
-    map(
-        pair(token(TokenType::Comma), var_entry()),
-        |(comma_token, entry)| PrefixedVarEntry { comma_token, entry },
-    )
+fn prefixed_var_entry<'a>() -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, VarEntry> {
+    map(pair(token(TokenType::Comma), var_entry()), |(_, entry)| {
+        entry
+    })
 }
 
 fn var_entries<'a>() -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, VarEntries> {
     map(
         pair(var_entry(), many0(prefixed_var_entry())),
-        |(first, rest)| VarEntries { first, rest },
+        |(first, rest)| VarEntries {
+            entries: {
+                let mut entries = vec![first];
+                entries.extend(rest.into_iter());
+                entries
+            },
+        },
     )
 }
 
@@ -259,8 +314,8 @@ fn var_section<'a>() -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, Va
     map(
         tuple((
             token(TokenType::KwVar),
-            var_entries(),
-            token(TokenType::Semicolon),
+            expect(var_entries(), "Expected variable name after 'var'"),
+            expect(token(TokenType::Semicolon), "Expected ';' after variables"),
         )),
         |(var_kw, entries, semicolon_token)| VarSection {
             var_kw,
@@ -274,18 +329,18 @@ fn procedure(input: TokenInput) -> IResult<TokenInput, Procedure> {
     map(
         tuple((
             token(TokenType::KwProcedure),
-            ident(),
-            token(TokenType::Semicolon),
-            map(block(), Box::new),
-            token(TokenType::Semicolon),
+            expect(ident(), "Expected procedure name"),
+            expect(
+                token(TokenType::Semicolon),
+                "Expected ';' after procedure name",
+            ),
+            expect(map(block(), Box::new), "Expected procedure body after ';'"),
+            expect(
+                token(TokenType::Semicolon),
+                "Expected ';' after procedure body",
+            ),
         )),
-        |(procedure_kw, name, first_semicolon_token, block, second_semicolon_token)| Procedure {
-            procedure_kw,
-            name,
-            first_semicolon_token,
-            block,
-            second_semicolon_token,
-        },
+        |(_, name, _, body, _)| Procedure { name, body },
     )(input)
 }
 
@@ -293,24 +348,23 @@ fn prefixed_factor<'a>() -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>
     map(
         pair(
             alt((token(TokenType::Asterisk), token(TokenType::Slash))),
-            factor(),
+            expect(factor(), "Expected factor after '*' or '/'"),
         ),
         |(operator, factor)| PrefixedFactor { operator, factor },
     )
 }
 
-fn parenthesized_factor(input: TokenInput) -> IResult<TokenInput, ParenthesizedFactor> {
+fn parenthesized_factor(input: TokenInput) -> IResult<TokenInput, Option<ParenthesizedFactor>> {
     map(
         tuple((
             token(TokenType::LeftParen),
-            map(expression(), Box::new),
-            token(TokenType::RightParen),
+            expect(map(expression(), Box::new), "Expected expression after '('"),
+            expect(
+                token(TokenType::RightParen),
+                "Expected ')' after expression",
+            ),
         )),
-        |(left_parenthesis_token, expression, right_parenthesis_token)| ParenthesizedFactor {
-            left_parenthesis_token,
-            expression,
-            right_parenthesis_token,
-        },
+        |(_, expression, _)| expression.map(|e| ParenthesizedFactor { expression: e }),
     )(input)
 }
 
@@ -349,10 +403,14 @@ fn expression<'a>() -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, Exp
     )
 }
 
-fn odd_condition<'a>() -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, OddCondition> {
+fn odd_condition<'a>() -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, Option<OddCondition>>
+{
     map(
-        tuple((token(TokenType::KwOdd), expression())),
-        |(odd_kw, expression)| OddCondition { odd_kw, expression },
+        tuple((
+            token(TokenType::KwOdd),
+            expect(expression(), "Expected expression after 'odd'"),
+        )),
+        |(_, expression)| expression.map(|e| OddCondition { expression: e }),
     )
 }
 
@@ -361,15 +419,21 @@ fn comparison_condition<'a>(
     map(
         tuple((
             expression(),
-            alt((
-                token(TokenType::Equal),
-                token(TokenType::Hash),
-                token(TokenType::LessThan),
-                token(TokenType::LessThanEqual),
-                token(TokenType::GreaterThan),
-                token(TokenType::GreaterThanEqual),
-            )),
-            expression(),
+            expect(
+                alt((
+                    token(TokenType::Equal),
+                    token(TokenType::Hash),
+                    token(TokenType::LessThan),
+                    token(TokenType::LessThanEqual),
+                    token(TokenType::GreaterThan),
+                    token(TokenType::GreaterThanEqual),
+                )),
+                "Expected comparison operator after expression",
+            ),
+            expect(
+                expression(),
+                "Expected expression after comparison operator",
+            ),
         )),
         |(left, operator, right)| ComparisonCondition {
             left,
@@ -389,10 +453,13 @@ fn condition<'a>() -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, Cond
 fn assignment_statement<'a>(
 ) -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, AssignmentStatement> {
     map(
-        tuple((ident(), token(TokenType::ColonEqual), expression())),
-        |(variable, colon_equal_token, expression)| AssignmentStatement {
+        tuple((
+            ident(),
+            expect(token(TokenType::ColonEqual), "Expected ':=' after name"),
+            expect(expression(), "Expected expression after ':='"),
+        )),
+        |(variable, _, expression)| AssignmentStatement {
             variable,
-            colon_equal_token,
             expression,
         },
     )
@@ -400,40 +467,36 @@ fn assignment_statement<'a>(
 
 fn procedure_call_statement<'a>(
 ) -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, ProcedureCallStatement> {
-    map(
-        tuple((token(TokenType::KwCall), ident())),
-        |(call_kw, name)| ProcedureCallStatement { call_kw, name },
-    )
+    map(tuple((token(TokenType::KwCall), ident())), |(_, name)| {
+        ProcedureCallStatement { name }
+    })
 }
 
 fn read_statement<'a>() -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, ReadStatement> {
     map(
-        tuple((token(TokenType::QuestionMark), ident())),
-        |(question_mark_token, name)| ReadStatement {
-            question_mark_token,
-            name,
-        },
+        tuple((
+            token(TokenType::QuestionMark),
+            expect(ident(), "Expected variable name after '?'"),
+        )),
+        |(_, name)| ReadStatement { name },
     )
 }
 
 fn write_statement<'a>() -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, WriteStatement> {
     map(
-        tuple((token(TokenType::ExclamationMark), expression())),
-        |(exclamation_mark_token, expression)| WriteStatement {
-            exclamation_mark_token,
-            expression,
-        },
+        tuple((
+            token(TokenType::ExclamationMark),
+            expect(expression(), "Expected expression after '!'"),
+        )),
+        |(_, expression)| WriteStatement { expression },
     )
 }
 
 fn prefixed_statement<'a>(
-) -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, PrefixedStatement> {
-    map(
-        pair(token(TokenType::Semicolon), statement),
-        |(semicolon_token, statement)| PrefixedStatement {
-            semicolon_token,
-            statement,
-        },
+) -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, Option<Statement>> {
+    preceded(
+        token(TokenType::Semicolon),
+        expect(statement, "Expected statement after ';'"),
     )
 }
 
@@ -445,28 +508,29 @@ fn block_statement<'a>() -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>
             many0(prefixed_statement()),
             token(TokenType::KwEnd),
         )),
-        |(begin_kw, first, rest, end_kw)| BlockStatement {
-            begin_kw,
-            first,
-            rest,
-            end_kw,
+        |(_, first, rest, _)| BlockStatement {
+            statements: {
+                let mut statements = vec![*first];
+                statements.extend(rest.into_iter().filter_map(|s| s));
+                statements
+            },
         },
     )
 }
 
-fn if_statement<'a>() -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, IfStatement> {
+fn if_statement<'a>() -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, Option<IfStatement>>
+{
     map(
         tuple((
             token(TokenType::KwIf),
-            condition(),
-            token(TokenType::KwThen),
-            map(statement, Box::new),
+            expect(condition(), "Expected condition after 'if'"),
+            expect(token(TokenType::KwThen), "Expected 'then' after condition"),
+            expect(map(statement, Box::new), "Expected statement after 'then'"),
         )),
-        |(if_kw, condition, then_kw, body)| IfStatement {
-            if_kw,
-            condition,
-            then_kw,
-            body,
+        |(_, condition, _, body)| {
+            let condition = condition?;
+            let body = body?;
+            Some(IfStatement { condition, body })
         },
     )
 }
@@ -479,12 +543,7 @@ fn while_statement<'a>() -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>
             token(TokenType::KwDo),
             map(statement, Box::new),
         )),
-        |(while_kw, condition, do_kw, body)| WhileStatement {
-            while_kw,
-            condition,
-            do_kw,
-            body,
-        },
+        |(_, condition, _, body)| WhileStatement { condition, body },
     )
 }
 
@@ -520,19 +579,23 @@ fn block<'a>() -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, Block> {
     )
 }
 
-fn program(tokens: &[Token]) -> IResult<TokenInput, Program> {
-    pair(block(), token(TokenType::Period))
-        .map(|(block, period_token)| Program {
-            block,
-            period_token,
-        })
-        .parse(TokenInput::new(tokens))
+fn program<'a>(tokens: &'a [Token], state: &'a State) -> IResult<TokenInput<'a>, Program> {
+    all_consuming(pair(
+        block(),
+        expect(token(TokenType::Period), "Expected '.' at end of program"),
+    ))
+    .map(|(block, _)| Program { block })
+    .parse(TokenInput::new(tokens, state))
 }
 
-pub(crate) fn parse(tokens: &[Token]) -> crate::Result<SyntaxTree> {
-    program(tokens)
-        .map(|(_, root)| SyntaxTree {
-            root: Box::new(root),
-        })
-        .map_err(|e| ParseError::Nom(e.to_string()).into())
+pub(crate) fn parse(tokens: &[Token]) -> (SyntaxTree, Vec<Error>) {
+    let errors = RefCell::new(Vec::new());
+    let tree = stacker::grow(1024 * 1024, || {
+        program(tokens, &State(&errors))
+            .map(|(_, root)| SyntaxTree {
+                root: Box::new(root),
+            })
+            .expect("parser cannot fail")
+    });
+    (tree, errors.into_inner())
 }
