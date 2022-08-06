@@ -1,4 +1,5 @@
 use std::error::Error;
+use std::fmt::Display;
 use std::iter::Enumerate;
 use std::num::NonZeroUsize;
 use std::ops::Range;
@@ -163,12 +164,16 @@ impl<'a> InputIter for TokenInput<'a> {
     }
 }
 
+fn take_only_token(t: TokenInput) -> Token {
+    t.tokens[0].clone()
+}
+
 fn token<'a>(ty: TokenType) -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, Token> {
     map(
         verify(take(1usize), move |t: &TokenInput| {
             t.tokens[0].token_type == ty
         }),
-        |t: TokenInput| t.tokens[0].clone(),
+        take_only_token,
     )
 }
 
@@ -177,7 +182,7 @@ fn ident<'a>() -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, Token> {
         verify(take(1usize), move |t: &TokenInput| {
             matches!(t.tokens[0].token_type, TokenType::Ident(_))
         }),
-        |t: TokenInput| t.tokens[0].clone(),
+        take_only_token,
     )
 }
 
@@ -186,7 +191,7 @@ fn number<'a>() -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, Token> 
         verify(take(1usize), move |t: &TokenInput| {
             matches!(t.tokens[0].token_type, TokenType::Number(_))
         }),
-        |t: TokenInput| t.tokens[0].clone(),
+        take_only_token,
     )
 }
 
