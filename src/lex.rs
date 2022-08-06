@@ -134,7 +134,10 @@ impl<'src> Iterator for Lexer<'src> {
                     let mut text = String::from(c);
                     loop {
                         match self.source.peek() {
-                            Some(c) if c.is_digit(10) => text.push(*c),
+                            Some(c) if c.is_digit(10) => {
+                                text.push(*c);
+                                self.source.next();
+                            }
                             _ => break,
                         }
                     }

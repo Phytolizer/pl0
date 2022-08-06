@@ -21,7 +21,27 @@ enum Error {
 type Result<T> = std::result::Result<T, Error>;
 
 fn run() -> Result<()> {
-    let tokens = lex(PathBuf::from("example.m"), "BEGIN END.")?;
+    let tokens = lex(
+        PathBuf::from("example.m"),
+        "
+            VAR x, squ;
+
+            PROCEDURE square;
+            BEGIN
+               squ := x * x
+            END;
+
+            BEGIN
+               x := 1;
+               WHILE x <= 10 DO
+               BEGIN
+                  CALL square;
+                  ! squ;
+                  x := x + 1
+               END
+            END.
+        ",
+    )?;
     let tree = parse(&tokens)?;
     dbg!(tree);
     Ok(())
