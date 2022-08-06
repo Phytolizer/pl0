@@ -32,9 +32,7 @@ use crate::tree::Block;
 use crate::tree::BlockStatement;
 use crate::tree::ComparisonCondition;
 use crate::tree::Condition;
-use crate::tree::ConstEntries;
 use crate::tree::ConstEntry;
-use crate::tree::ConstSection;
 use crate::tree::Expression;
 use crate::tree::Factor;
 use crate::tree::IfStatement;
@@ -50,8 +48,6 @@ use crate::tree::Statement;
 use crate::tree::StatementInner;
 use crate::tree::SyntaxTree;
 use crate::tree::Term;
-use crate::tree::VarEntries;
-use crate::tree::VarEntry;
 use crate::tree::VarSection;
 use crate::tree::WhileStatement;
 use crate::tree::WriteStatement;
@@ -259,53 +255,39 @@ fn prefixed_const_entry<'a>(
     )
 }
 
-fn const_entries<'a>() -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, ConstEntries> {
+fn const_entries<'a>() -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, Vec<ConstEntry>> {
     map(
         pair(const_entry(), many0(prefixed_const_entry())),
-        |(first, rest)| ConstEntries {
-            entries: {
-                let mut entries = vec![first];
-                entries.extend(rest.into_iter().filter_map(|e| e));
-                entries
-            },
+        |(first, rest)| {
+            let mut entries = vec![first];
+            entries.extend(rest.into_iter().filter_map(|e| e));
+            entries
         },
     )
 }
 
-fn const_section<'a>() -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, ConstSection> {
+fn const_section<'a>() -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, Vec<ConstEntry>> {
     map(
         tuple((
             token(TokenType::KwConst),
             expect(const_entries(), "Expected constant name after 'const'"),
             expect(token(TokenType::Semicolon), "Expected ';' after constants"),
         )),
-        |(const_kw, entries, semicolon_token)| ConstSection {
-            const_kw,
-            entries,
-            semicolon_token,
-        },
+        |(_, entries, _)| entries.unwrap_or(Vec::new()),
     )
 }
 
-fn var_entry<'a>() -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, VarEntry> {
-    map(ident(), |name| VarEntry { name })
+fn prefixed_var_entry<'a>() -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, Token> {
+    preceded(token(TokenType::Comma), ident())
 }
 
-fn prefixed_var_entry<'a>() -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, VarEntry> {
-    map(pair(token(TokenType::Comma), var_entry()), |(_, entry)| {
-        entry
-    })
-}
-
-fn var_entries<'a>() -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, VarEntries> {
+fn var_entries<'a>() -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, Vec<Token>> {
     map(
-        pair(var_entry(), many0(prefixed_var_entry())),
-        |(first, rest)| VarEntries {
-            entries: {
-                let mut entries = vec![first];
-                entries.extend(rest.into_iter());
-                entries
-            },
+        pair(ident(), many0(prefixed_var_entry())),
+        |(first, rest)| {
+            let mut entries = vec![first];
+            entries.extend(rest.into_iter());
+            entries
         },
     )
 }

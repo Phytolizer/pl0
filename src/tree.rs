@@ -12,22 +12,10 @@ pub(crate) struct Program {
 
 #[derive(Debug)]
 pub(crate) struct Block {
-    pub(crate) const_section: Option<ConstSection>,
+    pub(crate) const_section: Option<Vec<ConstEntry>>,
     pub(crate) var_section: Option<VarSection>,
     pub(crate) procedures: Vec<Procedure>,
     pub(crate) body: Statement,
-}
-
-#[derive(Debug)]
-pub(crate) struct ConstSection {
-    pub(crate) const_kw: Token,
-    pub(crate) entries: Option<ConstEntries>,
-    pub(crate) semicolon_token: Option<Token>,
-}
-
-#[derive(Debug)]
-pub(crate) struct ConstEntries {
-    pub(crate) entries: Vec<ConstEntry>,
 }
 
 #[derive(Debug)]
@@ -40,18 +28,8 @@ pub(crate) struct ConstEntry {
 #[derive(Debug)]
 pub(crate) struct VarSection {
     pub(crate) var_kw: Token,
-    pub(crate) entries: Option<VarEntries>,
+    pub(crate) entries: Option<Vec<Token>>,
     pub(crate) semicolon_token: Option<Token>,
-}
-
-#[derive(Debug)]
-pub(crate) struct VarEntries {
-    pub(crate) entries: Vec<VarEntry>,
-}
-
-#[derive(Debug)]
-pub(crate) struct VarEntry {
-    pub(crate) name: Token,
 }
 
 #[derive(Debug)]
