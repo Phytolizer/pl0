@@ -12,13 +12,21 @@ use parse::parse;
 enum Error {
     #[error(transparent)]
     Io(#[from] io::Error),
+    #[error("failed to parse program")]
+    FailedParse,
 }
 
 type Result<T> = std::result::Result<T, Error>;
 
 fn run() -> Result<()> {
     let tokens = lex_file("example.m")?;
-    let (tree, _errors) = parse(&tokens);
+    let (tree, errors) = parse(&tokens);
+    if !errors.is_empty() {
+        for error in errors {
+            println!("{}", error);
+        }
+        return Err(Error::FailedParse);
+    }
     dbg!(tree);
     Ok(())
 }

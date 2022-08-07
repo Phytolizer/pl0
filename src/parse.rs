@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::fmt::Display;
 use std::iter::Enumerate;
 use std::num::NonZeroUsize;
 use std::ops::Range;
@@ -48,13 +49,27 @@ use crate::tree::WhileStatement;
 
 #[derive(Debug)]
 pub(crate) struct Error {
-    pub(crate) location: SourceLocation,
+    pub(crate) location: Option<SourceLocation>,
     pub(crate) message: String,
 }
 
 impl Error {
-    fn new(location: SourceLocation, message: String) -> Self {
+    fn new(location: Option<SourceLocation>, message: String) -> Self {
         Self { location, message }
+    }
+}
+
+impl Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}: {}",
+            self.location
+                .as_ref()
+                .map(|l| l.to_string())
+                .unwrap_or_else(|| String::from("end of input")),
+            self.message
+        )
     }
 }
 
@@ -183,13 +198,13 @@ where
 {
     move |input| match parser(input) {
         Ok((remaining, out)) => Ok((remaining, Some(out))),
-        Err(nom::Err::Error(input) | nom::Err::Failure(input)) => {
+        Err(nom::Err::Error(e) | nom::Err::Failure(e)) => {
             let err = Error::new(
-                input.input.tokens[0].source_location.clone(),
+                (!e.input.tokens.is_empty()).then(|| e.input.tokens[0].source_location.clone()),
                 error_msg.to_string(),
             );
-            input.input.state.report_error(err);
-            Ok((input.input, None))
+            e.input.state.report_error(err);
+            Ok((e.input, None))
         }
         Err(e) => Err(e),
     }
@@ -514,13 +529,16 @@ fn block_statement<'a>(
     map(
         tuple((
             token(TokenType::KwBegin),
-            map(statement, Box::new),
+            expect(map(statement, Box::new), "Expected statement after 'begin'"),
             many0(prefixed_statement()),
-            token(TokenType::KwEnd),
+            expect(
+                token(TokenType::KwEnd),
+                "Expected 'end' after block statement body",
+            ),
         )),
         |(_, first, rest, _)| {
             Some({
-                let mut statements = vec![*first];
+                let mut statements = vec![first.map(|f| *f)?];
                 statements.extend(rest);
                 statements
             })
@@ -611,11 +629,14 @@ fn block<'a>() -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, Block> {
     )
 }
 
-fn program<'a>(tokens: &'a [Token], state: &'a State) -> IResult<TokenInput<'a>, Block> {
-    all_consuming(terminated(
-        block(),
-        expect(token(TokenType::Period), "Expected '.' at end of program"),
-    ))
+fn program<'a>(tokens: &'a [Token], state: &'a State) -> IResult<TokenInput<'a>, Option<Block>> {
+    expect(
+        all_consuming(terminated(
+            block(),
+            expect(token(TokenType::Period), "Expected '.' at end of program"),
+        )),
+        "Early end of input",
+    )
     .parse(TokenInput::new(tokens, state))
 }
 
@@ -624,7 +645,7 @@ pub(crate) fn parse(tokens: &[Token]) -> (SyntaxTree, Vec<Error>) {
     let tree = stacker::grow(1024 * 1024, || {
         program(tokens, &State(&errors))
             .map(|(_, root)| SyntaxTree {
-                root: Box::new(root),
+                root: root.map(Box::new).into(),
             })
             .expect("parser cannot fail")
     });

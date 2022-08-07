@@ -56,7 +56,7 @@ impl<T> From<Option<T>> for OrError<T> {
 
 #[derive(Debug)]
 pub(crate) struct SyntaxTree {
-    pub(crate) root: Box<Block>,
+    pub(crate) root: OrError<Box<Block>>,
 }
 
 #[derive(Debug)]
