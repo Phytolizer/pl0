@@ -15,6 +15,7 @@ use nom::combinator::verify;
 use nom::multi::many0;
 use nom::sequence::pair;
 use nom::sequence::preceded;
+use nom::sequence::terminated;
 use nom::sequence::tuple;
 use nom::IResult;
 use nom::InputIter;
@@ -29,28 +30,21 @@ use crate::data::Token;
 use crate::data::TokenType;
 use crate::tree::AssignmentStatement;
 use crate::tree::Block;
-use crate::tree::BlockStatement;
 use crate::tree::ComparisonCondition;
 use crate::tree::Condition;
 use crate::tree::ConstEntry;
 use crate::tree::Expression;
 use crate::tree::Factor;
 use crate::tree::IfStatement;
-use crate::tree::OddCondition;
-use crate::tree::ParenthesizedFactor;
+use crate::tree::OrError;
 use crate::tree::PrefixedFactor;
 use crate::tree::PrefixedTerm;
 use crate::tree::Procedure;
-use crate::tree::ProcedureCallStatement;
-use crate::tree::Program;
-use crate::tree::ReadStatement;
 use crate::tree::Statement;
-use crate::tree::StatementInner;
 use crate::tree::SyntaxTree;
 use crate::tree::Term;
 use crate::tree::VarSection;
 use crate::tree::WhileStatement;
-use crate::tree::WriteStatement;
 
 #[derive(Debug)]
 pub(crate) struct Error {
@@ -307,7 +301,7 @@ fn var_section<'a>() -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, Va
     )
 }
 
-fn procedure(input: TokenInput) -> IResult<TokenInput, Procedure> {
+fn procedure(input: TokenInput) -> IResult<TokenInput, Option<Procedure>> {
     map(
         tuple((
             token(TokenType::KwProcedure),
@@ -322,21 +316,32 @@ fn procedure(input: TokenInput) -> IResult<TokenInput, Procedure> {
                 "Expected ';' after procedure body",
             ),
         )),
-        |(_, name, _, body, _)| Procedure { name, body },
+        |(_, name, _, body, _)| {
+            Some(Procedure {
+                name: name?,
+                body: body?,
+            })
+        },
     )(input)
 }
 
-fn prefixed_factor<'a>() -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, PrefixedFactor> {
+fn prefixed_factor<'a>(
+) -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, Option<PrefixedFactor>> {
     map(
         pair(
             alt((token(TokenType::Asterisk), token(TokenType::Slash))),
             expect(factor(), "Expected factor after '*' or '/'"),
         ),
-        |(operator, factor)| PrefixedFactor { operator, factor },
+        |(operator, factor)| {
+            Some(PrefixedFactor {
+                operator,
+                factor: factor?,
+            })
+        },
     )
 }
 
-fn parenthesized_factor(input: TokenInput) -> IResult<TokenInput, Option<ParenthesizedFactor>> {
+fn parenthesized_factor(input: TokenInput) -> IResult<TokenInput, Option<Box<Expression>>> {
     map(
         tuple((
             token(TokenType::LeftParen),
@@ -346,7 +351,7 @@ fn parenthesized_factor(input: TokenInput) -> IResult<TokenInput, Option<Parenth
                 "Expected ')' after expression",
             ),
         )),
-        |(_, expression, _)| expression.map(|e| ParenthesizedFactor { expression: e }),
+        |(_, expression, _)| expression.map(|e| *e).flatten().map(Box::new),
     )(input)
 }
 
@@ -354,50 +359,65 @@ fn factor<'a>() -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, Factor>
     alt((
         map(ident(), Factor::Variable),
         map(number(), Factor::Number),
-        map(parenthesized_factor, Factor::Parenthesized),
+        map(parenthesized_factor, |f| Factor::Parenthesized(f.into())),
     ))
 }
 
-fn prefixed_term<'a>() -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, PrefixedTerm> {
+fn prefixed_term<'a>() -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, Option<PrefixedTerm>>
+{
     map(
         pair(
             alt((token(TokenType::Plus), token(TokenType::Minus))),
             term(),
         ),
-        |(operator, term)| PrefixedTerm { operator, term },
+        |(operator, term)| {
+            Some(PrefixedTerm {
+                operator,
+                term: term?,
+            })
+        },
     )
 }
 
-fn term<'a>() -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, Term> {
+fn term<'a>() -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, Option<Term>> {
     map(pair(factor(), many0(prefixed_factor())), |(first, rest)| {
-        Term { first, rest }
+        Some(Term {
+            first,
+            rest: rest.into_iter().collect::<Option<Vec<_>>>()?,
+        })
     })
 }
 
-fn expression<'a>() -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, Expression> {
+fn expression<'a>() -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, Option<Expression>> {
     map(
         tuple((
             opt(alt((token(TokenType::Plus), token(TokenType::Minus)))),
             term(),
             many0(prefixed_term()),
         )),
-        |(sign, first, rest)| Expression { sign, first, rest },
+        |(sign, first, rest)| {
+            Some(Expression {
+                sign,
+                first: first?,
+                rest: rest.into_iter().collect::<Option<Vec<_>>>()?,
+            })
+        },
     )
 }
 
-fn odd_condition<'a>() -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, Option<OddCondition>>
+fn odd_condition<'a>() -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, OrError<Expression>>
 {
     map(
-        tuple((
+        preceded(
             token(TokenType::KwOdd),
             expect(expression(), "Expected expression after 'odd'"),
-        )),
-        |(_, expression)| expression.map(|e| OddCondition { expression: e }),
+        ),
+        |e| e.flatten().into(),
     )
 }
 
 fn comparison_condition<'a>(
-) -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, ComparisonCondition> {
+) -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, Option<ComparisonCondition>> {
     map(
         tuple((
             expression(),
@@ -417,72 +437,80 @@ fn comparison_condition<'a>(
                 "Expected expression after comparison operator",
             ),
         )),
-        |(left, operator, right)| ComparisonCondition {
-            left,
-            operator,
-            right,
+        |(left, operator, right)| {
+            Some(ComparisonCondition {
+                left: left?,
+                operator: operator?,
+                right: right.flatten()?,
+            })
         },
     )
 }
 
-fn condition<'a>() -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, Condition> {
+fn condition<'a>() -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, OrError<Condition>> {
     alt((
-        map(odd_condition(), Condition::Odd),
-        map(comparison_condition(), Condition::Comparison),
+        map(odd_condition(), |c| c.map(Condition::Odd)),
+        map(comparison_condition(), |c| {
+            c.map(Condition::Comparison).into()
+        }),
     ))
 }
 
 fn assignment_statement<'a>(
-) -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, AssignmentStatement> {
+) -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, Option<AssignmentStatement>> {
     map(
         tuple((
             ident(),
             expect(token(TokenType::ColonEqual), "Expected ':=' after name"),
             expect(expression(), "Expected expression after ':='"),
         )),
-        |(variable, _, expression)| AssignmentStatement {
-            variable,
-            expression,
+        |(variable, _, expression)| {
+            Some(AssignmentStatement {
+                variable,
+                expression: expression.flatten()?,
+            })
         },
     )
 }
 
 fn procedure_call_statement<'a>(
-) -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, ProcedureCallStatement> {
-    map(tuple((token(TokenType::KwCall), ident())), |(_, name)| {
-        ProcedureCallStatement { name }
-    })
-}
-
-fn read_statement<'a>() -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, ReadStatement> {
-    map(
-        tuple((
-            token(TokenType::QuestionMark),
-            expect(ident(), "Expected variable name after '?'"),
-        )),
-        |(_, name)| ReadStatement { name },
+) -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, Option<Token>> {
+    preceded(
+        token(TokenType::KwCall),
+        expect(ident(), "Expected procedure name after 'call'"),
     )
 }
 
-fn write_statement<'a>() -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, WriteStatement> {
+fn read_statement<'a>() -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, Option<Token>> {
+    preceded(
+        token(TokenType::QuestionMark),
+        expect(ident(), "Expected variable name after '?'"),
+    )
+}
+
+fn write_statement<'a>() -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, Option<Expression>>
+{
     map(
         tuple((
             token(TokenType::ExclamationMark),
             expect(expression(), "Expected expression after '!'"),
         )),
-        |(_, expression)| WriteStatement { expression },
+        |(_, expression)| Some(expression.flatten()?),
     )
 }
 
 fn prefixed_statement<'a>(
-) -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, Option<Statement>> {
+) -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, OrError<Statement>> {
     preceded(
         token(TokenType::Semicolon),
-        expect(statement, "Expected statement after ';'"),
+        map(expect(statement, "Expected statement after ';'"), |s| {
+            OrError::from(s).flatten()
+        }),
     )
 }
 
-fn block_statement<'a>() -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, BlockStatement> {
+fn block_statement<'a>(
+) -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, Option<Vec<OrError<Statement>>>> {
     map(
         tuple((
             token(TokenType::KwBegin),
@@ -490,12 +518,12 @@ fn block_statement<'a>() -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>
             many0(prefixed_statement()),
             token(TokenType::KwEnd),
         )),
-        |(_, first, rest, _)| BlockStatement {
-            statements: {
+        |(_, first, rest, _)| {
+            Some({
                 let mut statements = vec![*first];
-                statements.extend(rest.into_iter().filter_map(|s| s));
+                statements.extend(rest);
                 statements
-            },
+            })
         },
     )
 }
@@ -510,37 +538,59 @@ fn if_statement<'a>() -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, O
             expect(map(statement, Box::new), "Expected statement after 'then'"),
         )),
         |(_, condition, _, body)| {
-            let condition = condition?;
-            let body = body?;
+            let condition = OrError::from(condition).flatten();
+            let body = OrError::from(body).map(|b| *b).flatten().map(Box::new);
             Some(IfStatement { condition, body })
         },
     )
 }
 
-fn while_statement<'a>() -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, WhileStatement> {
+fn while_statement<'a>(
+) -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, Option<WhileStatement>> {
     map(
         tuple((
             token(TokenType::KwWhile),
-            condition(),
-            token(TokenType::KwDo),
-            map(statement, Box::new),
+            expect(condition(), "Expected condition after 'while'"),
+            expect(
+                token(TokenType::KwDo),
+                "Expected 'do' after while loop condition",
+            ),
+            expect(
+                map(statement, Box::new),
+                "Expected while loop body after 'do'",
+            ),
         )),
-        |(_, condition, _, body)| WhileStatement { condition, body },
+        |(_, condition, _, body)| {
+            Some(WhileStatement {
+                condition: OrError::from(condition).flatten(),
+                body: OrError::from(body).map(|b| *b).flatten().map(Box::new),
+            })
+        },
     )
 }
 
-fn statement(input: TokenInput) -> IResult<TokenInput, Statement> {
+fn statement(input: TokenInput) -> IResult<TokenInput, OrError<Statement>> {
     map(
         opt(alt((
-            map(assignment_statement(), StatementInner::Assignment),
-            map(procedure_call_statement(), StatementInner::ProcedureCall),
-            map(read_statement(), StatementInner::Read),
-            map(write_statement(), StatementInner::Write),
-            map(block_statement(), StatementInner::Block),
-            map(if_statement(), StatementInner::If),
-            map(while_statement(), StatementInner::While),
+            map(assignment_statement(), |s| {
+                OrError::from(s).map(Statement::Assignment)
+            }),
+            map(procedure_call_statement(), |s| {
+                OrError::from(s).map(Statement::ProcedureCall)
+            }),
+            map(read_statement(), |s| OrError::from(s).map(Statement::Read)),
+            map(write_statement(), |s| {
+                OrError::from(s).map(Statement::Write)
+            }),
+            map(block_statement(), |s| {
+                OrError::from(s).map(Statement::Block)
+            }),
+            map(if_statement(), |s| OrError::from(s).map(Statement::If)),
+            map(while_statement(), |s| {
+                OrError::from(s).map(Statement::While)
+            }),
         ))),
-        |inner| Statement { inner },
+        |s| s.unwrap_or(OrError::Ok(Statement::Empty)),
     )(input)
 }
 
@@ -555,18 +605,17 @@ fn block<'a>() -> impl FnMut(TokenInput<'a>) -> IResult<TokenInput<'a>, Block> {
         |(const_section, var_section, procedures, body)| Block {
             const_section,
             var_section,
-            procedures,
+            procedures: procedures.into_iter().map(Into::into).collect(),
             body,
         },
     )
 }
 
-fn program<'a>(tokens: &'a [Token], state: &'a State) -> IResult<TokenInput<'a>, Program> {
-    all_consuming(pair(
+fn program<'a>(tokens: &'a [Token], state: &'a State) -> IResult<TokenInput<'a>, Block> {
+    all_consuming(terminated(
         block(),
         expect(token(TokenType::Period), "Expected '.' at end of program"),
     ))
-    .map(|(block, _)| Program { block })
     .parse(TokenInput::new(tokens, state))
 }
 

@@ -1,21 +1,70 @@
 use crate::data::Token;
 
 #[derive(Debug)]
-pub(crate) struct SyntaxTree {
-    pub(crate) root: Box<Program>,
+pub(crate) enum OrError<T> {
+    Ok(T),
+    Err,
+}
+
+impl<T> OrError<T> {
+    pub(crate) fn map<U>(self, f: impl FnOnce(T) -> U) -> OrError<U> {
+        match self {
+            OrError::Ok(t) => OrError::Ok(f(t)),
+            OrError::Err => OrError::Err,
+        }
+    }
+
+    pub(crate) fn into_option(self) -> Option<T> {
+        match self {
+            OrError::Ok(t) => Some(t),
+            OrError::Err => None,
+        }
+    }
+}
+
+impl<T> OrError<OrError<T>> {
+    pub(crate) fn flatten(self) -> OrError<T> {
+        match self {
+            OrError::Ok(OrError::Ok(t)) => OrError::Ok(t),
+            OrError::Ok(OrError::Err) => OrError::Err,
+            OrError::Err => OrError::Err,
+        }
+    }
+}
+
+impl<T> FromIterator<OrError<T>> for OrError<Vec<T>> {
+    fn from_iter<I: IntoIterator<Item = OrError<T>>>(iter: I) -> Self {
+        let mut vec = Vec::new();
+        for item in iter {
+            match item {
+                OrError::Ok(t) => vec.push(t),
+                OrError::Err => return OrError::Err,
+            }
+        }
+        OrError::Ok(vec)
+    }
+}
+
+impl<T> From<Option<T>> for OrError<T> {
+    fn from(opt: Option<T>) -> Self {
+        match opt {
+            Some(t) => OrError::Ok(t),
+            None => OrError::Err,
+        }
+    }
 }
 
 #[derive(Debug)]
-pub(crate) struct Program {
-    pub(crate) block: Block,
+pub(crate) struct SyntaxTree {
+    pub(crate) root: Box<Block>,
 }
 
 #[derive(Debug)]
 pub(crate) struct Block {
     pub(crate) const_section: Option<Vec<ConstEntry>>,
     pub(crate) var_section: Option<VarSection>,
-    pub(crate) procedures: Vec<Procedure>,
-    pub(crate) body: Statement,
+    pub(crate) procedures: Vec<OrError<Procedure>>,
+    pub(crate) body: OrError<Statement>,
 }
 
 #[derive(Debug)]
@@ -34,80 +83,51 @@ pub(crate) struct VarSection {
 
 #[derive(Debug)]
 pub(crate) struct Procedure {
-    pub(crate) name: Option<Token>,
-    pub(crate) body: Option<Box<Block>>,
+    pub(crate) name: Token,
+    pub(crate) body: Box<Block>,
 }
 
 #[derive(Debug)]
-pub(crate) struct Statement {
-    pub(crate) inner: Option<StatementInner>,
-}
-
-#[derive(Debug)]
-pub(crate) enum StatementInner {
+pub(crate) enum Statement {
     Assignment(AssignmentStatement),
-    ProcedureCall(ProcedureCallStatement),
-    Read(ReadStatement),
-    Write(WriteStatement),
-    Block(BlockStatement),
-    If(Option<IfStatement>),
+    ProcedureCall(Token),
+    Read(Token),
+    Write(Expression),
+    Block(Vec<OrError<Statement>>),
+    If(IfStatement),
     While(WhileStatement),
+    Empty,
 }
 
 #[derive(Debug)]
 pub(crate) struct AssignmentStatement {
     pub(crate) variable: Token,
-    pub(crate) expression: Option<Expression>,
-}
-
-#[derive(Debug)]
-pub(crate) struct ProcedureCallStatement {
-    pub(crate) name: Token,
-}
-
-#[derive(Debug)]
-pub(crate) struct ReadStatement {
-    pub(crate) name: Option<Token>,
-}
-
-#[derive(Debug)]
-pub(crate) struct WriteStatement {
-    pub(crate) expression: Option<Expression>,
-}
-
-#[derive(Debug)]
-pub(crate) struct BlockStatement {
-    pub(crate) statements: Vec<Statement>,
+    pub(crate) expression: Expression,
 }
 
 #[derive(Debug)]
 pub(crate) struct IfStatement {
-    pub(crate) condition: Condition,
-    pub(crate) body: Box<Statement>,
+    pub(crate) condition: OrError<Condition>,
+    pub(crate) body: OrError<Box<Statement>>,
 }
 
 #[derive(Debug)]
 pub(crate) struct WhileStatement {
-    pub(crate) condition: Condition,
-    pub(crate) body: Box<Statement>,
+    pub(crate) condition: OrError<Condition>,
+    pub(crate) body: OrError<Box<Statement>>,
 }
 
 #[derive(Debug)]
 pub(crate) enum Condition {
-    Odd(Option<OddCondition>),
+    Odd(Expression),
     Comparison(ComparisonCondition),
-}
-
-#[derive(Debug)]
-pub(crate) struct OddCondition {
-    pub(crate) expression: Expression,
 }
 
 #[derive(Debug)]
 pub(crate) struct ComparisonCondition {
     pub(crate) left: Expression,
-    pub(crate) operator: Option<Token>,
-    pub(crate) right: Option<Expression>,
+    pub(crate) operator: Token,
+    pub(crate) right: Expression,
 }
 
 #[derive(Debug)]
@@ -132,17 +152,12 @@ pub(crate) struct Term {
 #[derive(Debug)]
 pub(crate) struct PrefixedFactor {
     pub(crate) operator: Token,
-    pub(crate) factor: Option<Factor>,
+    pub(crate) factor: Factor,
 }
 
 #[derive(Debug)]
 pub(crate) enum Factor {
     Variable(Token),
     Number(Token),
-    Parenthesized(Option<ParenthesizedFactor>),
-}
-
-#[derive(Debug)]
-pub(crate) struct ParenthesizedFactor {
-    pub(crate) expression: Box<Expression>,
+    Parenthesized(OrError<Box<Expression>>),
 }
