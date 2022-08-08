@@ -1,10 +1,12 @@
 use std::io;
 
+mod compile;
 mod data;
 mod lex;
 mod parse;
 mod tree;
 
+use compile::compile;
 use lex::lex_file;
 use parse::parse;
 
@@ -27,7 +29,7 @@ fn run() -> Result<()> {
         }
         return Err(Error::FailedParse);
     }
-    dbg!(tree);
+    compile(tree)?;
     Ok(())
 }
 
